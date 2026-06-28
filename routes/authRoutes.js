@@ -8,6 +8,7 @@ import {
   changePassword,
 } from "../controllers/authController.js";
 import protect from "../middleware/auth.js";
+import validate from "../middleware/validate.js";
 
 const router = express.Router();
 
@@ -23,7 +24,7 @@ const registerValidation = [
     .withMessage("Please provide a valid email "),
   body("password")
     .isLength({ min: 6 })
-    .withMessage("password must be at leaset 6 characters"),
+    .withMessage("password must be at least 6 characters"),
 ];
 
 const loginValidation = [
@@ -35,8 +36,8 @@ const loginValidation = [
 ];
 
 // Public routes
-router.post("/register", registerValidation, register);
-router.post("/login", loginValidation, login);
+router.post("/register", registerValidation, validate, register);
+router.post("/login", loginValidation, validate, login);
 
 // Protected routes
 router.get("/profile", protect, getProfile);

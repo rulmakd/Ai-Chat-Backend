@@ -1,14 +1,11 @@
 import DocumentInfo from "../models/DocumentInfo.js";
 import Document from "../models/Document.js";
-
 import ChatHistory from "../models/ChatHistory.js";
-import * as geminiService from "../utils/geminiService.js";
-import { findRelevantChunks } from "../utils/textChunker.js";
+import * as langChain from "../utils/langChain.js";
 
-// @desc Generate document Generate-Documen-Info
+// @desc Generate document headline/about/education cards
 // @route POST /api/ai/generate-document-info
 // @access Private
-
 export const generateDocumentInfo = async (req, res, next) => {
   try {
     const { documentId } = req.body;
@@ -32,7 +29,7 @@ export const generateDocumentInfo = async (req, res, next) => {
       return res.status(200).json({
         success: true,
         data: documentInfo,
-        message: "Document Info (cached)",
+        message: "Document info (cached)",
       });
     }
 
@@ -51,8 +48,8 @@ export const generateDocumentInfo = async (req, res, next) => {
       });
     }
 
-    // 4. Generate AI content
-    const { headline, about, cards } = await geminiService.generateDocumentInfo(
+    // 4. Generate AI content via the LangChain structured-output chain
+    const { headline, about, cards } = await langChain.generateDocumentInfo(
       document.extractedText,
     );
 
@@ -75,17 +72,17 @@ export const generateDocumentInfo = async (req, res, next) => {
         upsert: true,
       },
     );
+
     // 6. Response
     return res.status(200).json({
       success: true,
       data: documentInfo,
-      message: "Document Information generated successfully",
+      message: "Document information generated successfully",
     });
   } catch (error) {
     next(error);
   }
 };
-
 
 // @desc Generate document summary
 // @route POST /api/ai/generate-summary
@@ -111,17 +108,17 @@ export const generateSummary = async (req, res, next) => {
       return res.status(404).json({
         success: false,
         error: "Document not found or not ready",
-        statuscode: 404,
+        statusCode: 404,
       });
     }
 
-    // Generate summary using Gemini
-    const summary = await geminiService.generateSummary(document.extractedText);
+    // Generate summary using the LangChain chain
+    const summary = await langChain.generateSummary(document.extractedText);
 
     res.status(200).json({
       success: true,
       data: {
-        documentid: document._id,
+        documentId: document._id,
         title: document.title,
         summary,
       },
@@ -132,7 +129,7 @@ export const generateSummary = async (req, res, next) => {
   }
 };
 
-// @desc Chat with document
+// @desc Chat with a document (RAG: semantic retrieval + conversational memory)
 // @route POST /api/ai/chat
 // @access Private
 export const chat = async (req, res, next) => {
@@ -143,10 +140,11 @@ export const chat = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         error: "Please provide documentId and question",
-        statsuCode: 400,
+        statusCode: 400,
       });
     }
 
+    // Need chunk embeddings for retrieval
     const document = await Document.findOne({
       _id: documentId,
       userId: req.user._id,
@@ -157,12 +155,13 @@ export const chat = async (req, res, next) => {
       return res.status(404).json({
         success: false,
         error: "Document not found or not ready",
-        statsuCode: 404,
+        statusCode: 404,
       });
     }
 
-    // Find relevant chunks
-    const relevantChunks = findRelevantChunks(document.chunks, question, 3);
+    // Embed the question and retrieve the most semantically relevant chunks
+    const queryEmbedding = await langChain.embedQuery(question);
+    const relevantChunks = langChain.findRelevantChunks(document.chunks, queryEmbedding, 3);
     const chunkIndices = relevantChunks.map((c) => c.chunkIndex);
 
     // Get or create chat history
@@ -179,11 +178,18 @@ export const chat = async (req, res, next) => {
       });
     }
 
-    // Generate response using Gemini
-    const answer = await geminiService.chatWithContext(
+    // Give the model memory of the last few turns so follow-up questions work
+    const recentHistory = chatHistory.messages.slice(-6).map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+
+    // Generate response via the LangChain RAG chain
+    const answer = await langChain.chatWithContext({
       question,
-      relevantChunks,
-    );
+      chunks: relevantChunks,
+      history: recentHistory,
+    });
 
     // Save conversation
     chatHistory.messages.push(
@@ -211,7 +217,6 @@ export const chat = async (req, res, next) => {
         relevantChunks: chunkIndices,
         chatHistoryId: chatHistory._id,
       },
-
       message: "Response generated successfully",
     });
   } catch (error) {
@@ -219,7 +224,7 @@ export const chat = async (req, res, next) => {
   }
 };
 
-// @desc Explain concept from document
+// @desc Explain a concept from a document
 // @route POST /api/ai/explain-concept
 // @access Private
 export const explainConcept = async (req, res, next) => {
@@ -248,12 +253,13 @@ export const explainConcept = async (req, res, next) => {
       });
     }
 
-    // Find relevant chunks for the concept
-    const relevantChunks = findRelevantChunks(document.chunks, concept, 3);
-    const context = relevantChunks.map((c) => c.concept).join("\n\n");
+    // Find relevant chunks for the concept via semantic search
+    const queryEmbedding = await langChain.embedQuery(concept);
+    const relevantChunks = langChain.findRelevantChunks(document.chunks, queryEmbedding, 3);
+    const context = relevantChunks.map((c) => c.content).join("\n\n");
 
-    // Generate explaination using Gemini
-    const explanation = await geminiService.explainConcept(concept, context);
+    // Generate explanation using the LangChain chain
+    const explanation = await langChain.explainConcept({ concept, context });
 
     res.status(200).json({
       success: true,
@@ -270,7 +276,7 @@ export const explainConcept = async (req, res, next) => {
 };
 
 // @desc Get chat history for a document
-// @route GET /api/ai/chat-histoty/:documentId
+// @route GET /api/ai/chat-history/:documentId
 // @access Private
 export const getChatHistory = async (req, res, next) => {
   try {
@@ -279,7 +285,7 @@ export const getChatHistory = async (req, res, next) => {
     if (!documentId) {
       return res.status(400).json({
         success: false,
-        error: "Please provide documentid",
+        error: "Please provide documentId",
         statusCode: 400,
       });
     }
@@ -292,7 +298,7 @@ export const getChatHistory = async (req, res, next) => {
     if (!chatHistory) {
       return res.status(200).json({
         success: true,
-        data: [], // Return an empty array if not chat history found
+        data: [], // Return an empty array if no chat history found
         message: "No chat history found for this document",
       });
     }

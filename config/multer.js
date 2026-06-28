@@ -20,7 +20,7 @@ const fileFilter = (req, file, cd) => {
   if (file.mimetype === "application/pdf") {
     cd(null, true);
   } else {
-    cd(new Error("Only PDF files are allowed:"), false);
+    cd(new Error("Only PDF files are allowed"), false);
   }
 };
 

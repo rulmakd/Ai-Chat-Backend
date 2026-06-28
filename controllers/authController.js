@@ -15,8 +15,8 @@ export const register = async (req, res, next) => {
   try {
     const { username, email, password } = req.body;
 
-    //Check if user exists
-    const userExists = await User.findOne({ $or: [{ email }] });
+    //Check if user exists (by email or username)
+    const userExists = await User.findOne({ $or: [{ email }, { username }] });
 
     if (userExists) {
       return res.status(400).json({
@@ -98,14 +98,16 @@ export const login = async (req, res, next) => {
     const token = generateToken(user._id);
     res.status(200).json({
       success: true,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        profileImage: user.profileImage,
+      data: {
+        user: {
+          id: user._id,
+          username: user.username,
+          email: user.email,
+          profileImage: user.profileImage,
+        },
+        token,
       },
-      token,
-      message: "Login success",
+      message: "Login successful",
     });
   } catch (error) {
     next(error);
@@ -166,7 +168,7 @@ export const updateProfile = async (req, res, next) => {
 };
 
 //@desc Change Password
-//@route PUT/api/auth/change-password
+//@route POST /api/auth/change-password
 //@access Private
 export const changePassword = async (req, res, next) => {
   try {

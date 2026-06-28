@@ -8,10 +8,7 @@ import errorHandler from "./middleware/errorHandler.js";
 
 import authRoutes from "./routes/authRoutes.js";
 import documentRoutes from "./routes/documentRoutes.js";
-
 import aiRoutes from "./routes/aiRoutes.js";
-import quizRoutes from "./routes/quizRoutes.js";
-
 
 // Initialize express app
 const app = express();
@@ -20,29 +17,31 @@ const app = express();
 connectDB();
 
 //Middleware to handle cors
+// Note: credentials:true cannot be combined with origin:"*" per the CORS spec
+// (browsers reject it). Since this API authenticates via a Bearer token in the
+// Authorization header rather than cookies, credentials aren't needed at all.
 app.use(
   cors({
     origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true,
   }),
 );
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Simple health check — handy for deployment platforms (Render/Vercel) to verify the app is up
+app.get("/api/health", (req, res) => {
+  res.status(200).json({ success: true, message: "OK" });
+});
+
 //Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/documents", documentRoutes);
-
 app.use("/api/ai", aiRoutes);
-app.use("/api/quizzes", quizRoutes);
 
-
-app.use(errorHandler);
-
-// 404 handler
+// 404 handler — must come after all real routes
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -50,6 +49,9 @@ app.use((req, res) => {
     statusCode: 404,
   });
 });
+
+// Error handler — must be last
+app.use(errorHandler);
 
 //Start Server
 const PORT = process.env.PORT || 8000;

@@ -20,6 +20,10 @@ const documentSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    publicId: {
+      type: String,
+      required: true,
+    },
     fileSize: {
       type: Number,
       required: true,
@@ -41,6 +45,11 @@ const documentSchema = new mongoose.Schema(
         chunkIndex: {
           type: Number,
           required: true,
+        },
+        // Vector embedding used for semantic search during chat/explain.
+        embedding: {
+          type: [Number],
+          default: [],
         },
       },
     ],

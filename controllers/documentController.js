@@ -1,9 +1,7 @@
 import Document from "../models/Document.js";
-import Flashcard from "../models/Flashcard.js";
-import Quiz from "../models/Quiz.js";
 import ChatHistory from "../models/ChatHistory.js";
 import { extractTextFromPDF } from "../utils/pdfParser.js";
-import { chunkText } from "../utils/textChunker.js";
+import { splitTextIntoChunks, embedTexts } from "../utils/langChain.js";
 import fs from "fs/promises";
 import mongoose from "mongoose";
 import axios from "axios";
@@ -25,7 +23,9 @@ export const uploadDocument = async (req, res, next) => {
     const { title } = req.body;
     if (!title) {
       // Delete uploaded file if no title provided
-      await fs.unlink(req.file.path);
+      await cloudinary.uploader
+        .destroy(req.file.filename, { resource_type: "raw" })
+        .catch(() => {});
       return res.status(400).json({
         success: false,
         error: "Please provide a document title",
@@ -42,10 +42,10 @@ export const uploadDocument = async (req, res, next) => {
       publicId: req.file.filename, // Cloudinary public_id
       fileSize: req.file.size,
       status: "processing",
-      uploadedAt: new Date(),
+      uploadDate: new Date(),
     });
 
-    // Process PDF in background (in production, use a queue like Bull)
+    // Process PDF in background (in production, use a queue like BullMQ)
     processPDF(document._id, req.file.path).catch((err) => {
       console.error("PDF processing error:", err);
     });
@@ -60,10 +60,12 @@ export const uploadDocument = async (req, res, next) => {
   }
 };
 
-// Helper function to process PDF
+// Helper function to process an uploaded PDF: extract text, chunk it, embed
+// each chunk, and store the result on the Document once ready.
 const processPDF = async (documentId, fileUrl) => {
+  const tempPath = `./temp-${documentId}.pdf`;
+
   try {
-    const tempPath = `./temp-${documentId}.pdf`;
     const response = await axios({
       url: fileUrl,
       method: "GET",
@@ -74,8 +76,16 @@ const processPDF = async (documentId, fileUrl) => {
 
     const { text } = await extractTextFromPDF(tempPath);
 
-    // Create chunks
-    const chunks = chunkText(text, 500, 50);
+    // Split into chunks with LangChain's RecursiveCharacterTextSplitter
+    const baseChunks = await splitTextIntoChunks(text);
+
+    // Embed every chunk up front so chat/explain can do real semantic search
+    // instead of keyword matching.
+    const embeddings = await embedTexts(baseChunks.map((c) => c.content));
+    const chunks = baseChunks.map((chunk, i) => ({
+      ...chunk,
+      embedding: embeddings[i] || [],
+    }));
 
     // Update document
     await Document.findByIdAndUpdate(documentId, {
@@ -84,19 +94,20 @@ const processPDF = async (documentId, fileUrl) => {
       status: "ready",
     });
 
-    await fs.unlink(tempPath);
-
-    console.log(`Documnet ${documentId} processed successfully`);
+    console.log(`Document ${documentId} processed successfully`);
   } catch (error) {
     console.error(`Error processing document ${documentId}:`, error);
 
     await Document.findByIdAndUpdate(documentId, {
       status: "failed",
     });
+  } finally {
+    // Always clean up the temp file, even if processing failed partway through
+    await fs.unlink(tempPath).catch(() => {});
   }
 };
 
-//@desc Get all user document
+//@desc Get all user documents
 //@route GET /api/documents
 //@access Private
 export const getDocuments = async (req, res, next) => {
@@ -106,33 +117,9 @@ export const getDocuments = async (req, res, next) => {
         $match: { userId: new mongoose.Types.ObjectId(req.user._id) },
       },
       {
-        $lookup: {
-          from: "flashcards",
-          localField: "_id",
-          foreignField: "documentId",
-          as: "flashcardSets",
-        },
-      },
-      {
-        $lookup: {
-          from: "quizzes",
-          localField: "_id",
-          foreignField: "documentId",
-          as: "quizzes",
-        },
-      },
-      {
-        $addFields: {
-          flashcardCount: { $size: "$flashcardSets" },
-          quizCount: { $size: "$quizzes" },
-        },
-      },
-      {
         $project: {
           extractedText: 0,
           chunks: 0,
-          flashcardSets: 0,
-          quizzes: 0,
         },
       },
       {
@@ -167,24 +154,14 @@ export const getDocument = async (req, res, next) => {
       });
     }
 
-    // Get counts of associated flashcards and quizzes
-    const flashcardCount = await Flashcard.countDocuments({
-      documentId: document._id,
-      userId: req.user._id,
-    });
-    const quizCount = await Quiz.countDocuments({
-      documentId: document._id,
-      userId: req.user._id,
-    });
-
     // Update last accessed
     document.lastAccessed = Date.now();
     await document.save();
 
-    // Combine document data with counts
+    // Strip the (large) embedding vectors before sending the document back —
+    // the client only ever needs chunk text, not the raw vectors.
     const documentData = document.toObject();
-    documentData.flashcardCount = flashcardCount;
-    documentData.quizCount = quizCount;
+    documentData.chunks = documentData.chunks.map(({ embedding, ...rest }) => rest);
 
     res.status(200).json({
       success: true,
@@ -213,24 +190,11 @@ export const deleteDocument = async (req, res, next) => {
       });
     }
 
-    const publicId =
-      "user_document/" + document.filePath.split("/").pop().split(".")[0];
-
-    await cloudinary.uploader.destroy(publicId, {
+    await cloudinary.uploader.destroy(document.publicId, {
       resource_type: "raw",
     });
 
-    // Delete Flashcard Database of this document
-    await Flashcard.deleteMany({
-      documentId: document._id,
-    });
-
-    // Delete Quiz database of this document
-    await Quiz.deleteMany({
-      documentId: document._id,
-    });
-
-    // Delete Chat History database of this document
+    // Delete chat history for this document
     await ChatHistory.deleteMany({
       documentId: document._id,
     });
@@ -239,7 +203,7 @@ export const deleteDocument = async (req, res, next) => {
     await document.deleteOne();
 
     res.status(200).json({
-      sucess: true,
+      success: true,
       message: "Document deleted successfully",
     });
   } catch (error) {

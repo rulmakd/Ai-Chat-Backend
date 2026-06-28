@@ -38,6 +38,14 @@ const protect = async (req, res, next) => {
           statusCode: 401,
         });
       }
+
+      // Any other verification failure (invalid signature, malformed token, etc.)
+      // must also respond — otherwise the request hangs with no response at all.
+      return res.status(401).json({
+        success: false,
+        error: "Not authorized, invalid token",
+        statusCode: 401,
+      });
     }
   }
 
