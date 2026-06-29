@@ -294,6 +294,38 @@ export const chatWithContext = async ({ question, chunks, history = [] }) => {
   }
 };
 
+const generalChatPrompt = ChatPromptTemplate.fromMessages([
+  [
+    "system",
+    "You are a helpful, friendly AI assistant. Answer the user's questions clearly " +
+      "and conversationally, using the chat history for context on follow-ups.",
+  ],
+  new MessagesPlaceholder("history"),
+  ["human", "{question}"],
+]);
+
+/**
+ * General-purpose chat that isn't grounded in any uploaded document — a plain
+ * conversational assistant, still with memory of recent turns.
+ * @param {Object} params
+ * @param {string} params.question
+ * @param {Array<{role: "user"|"assistant", content: string}>} [params.history]
+ * @returns {Promise<string>}
+ */
+export const generalChat = async ({ question, history = [] }) => {
+  try {
+    const formattedHistory = history.map((m) =>
+      m.role === "user" ? new HumanMessage(m.content) : new AIMessage(m.content),
+    );
+
+    const chain = generalChatPrompt.pipe(getChatModel()).pipe(new StringOutputParser());
+    return await chain.invoke({ question, history: formattedHistory });
+  } catch (error) {
+    console.error("LangChain error (generalChat):", error);
+    throw new Error("Failed to process chat request");
+  }
+};
+
 const explainConceptPrompt = ChatPromptTemplate.fromMessages([
   [
     "system",

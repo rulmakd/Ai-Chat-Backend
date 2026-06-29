@@ -10,7 +10,7 @@ const chatHistorySchema = new mongoose.Schema(
     documentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Document",
-      required: true,
+      default: null, // null = general chat, not tied to any document
     },
 
     messages: [

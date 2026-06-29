@@ -79,17 +79,20 @@ POST /api/ai/generate-summary
 
 ---
 
-## Chat with a document
+## Chat with AI
 
 ```
 POST /api/ai/chat
 ```
 
-Embeds the question, retrieves the most semantically relevant chunks via
-cosine similarity (not keyword matching), and answers using those chunks plus
-the last few turns of conversation history for context.
+`documentId` is **optional**. If given, the question is answered using that
+document via RAG (embeds the question, retrieves the most semantically
+relevant chunks via cosine similarity, and answers from them). If omitted,
+it's a general conversation with the assistant — no document grounding, but
+conversation memory still works either way (the last few turns are passed
+back to Gemini so follow-ups make sense).
 
-**Body**
+**Body — chat about a document**
 
 ```json
 {
@@ -98,7 +101,13 @@ the last few turns of conversation history for context.
 }
 ```
 
-**Response — 200 OK**
+**Body — general chat (no document)**
+
+```json
+{ "question": "Can you explain Big-O notation in simple terms?" }
+```
+
+**Response — 200 OK** (same shape either way; `relevantChunks` is empty for general chat)
 
 ```json
 {
@@ -114,9 +123,14 @@ the last few turns of conversation history for context.
 ```
 
 `relevantChunks` are the `chunkIndex` values of the document chunks used as
-context, in case the client wants to highlight or link to them.
+context, in case the client wants to highlight or link to them. This is
+always `[]` for general (no-document) chat.
 
-**Response — 404 Not Found**
+General chat and per-document chat each keep their own separate history — a
+user has one general conversation history, plus one per document they've
+chatted with.
+
+**Response — 404 Not Found** (only when a documentId is given but invalid/not ready)
 
 ```json
 { "success": false, "error": "Document not found or not ready", "statusCode": 404 }
@@ -161,7 +175,8 @@ named concept rather than an answer to a free-form question.
 ## Get chat history
 
 ```
-GET /api/ai/chat-history/:documentId
+GET /api/ai/chat-history              (general chat history)
+GET /api/ai/chat-history/:documentId  (history for a specific document)
 ```
 
 **Response — 200 OK**
@@ -187,5 +202,5 @@ GET /api/ai/chat-history/:documentId
 }
 ```
 
-If no chat history exists yet for that document, `data` is `[]` with message
-`"No chat history found for this document"`.
+If no chat history exists yet, `data` is `[]` with message
+`"No chat history found"`.

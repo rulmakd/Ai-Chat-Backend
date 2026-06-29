@@ -129,51 +129,58 @@ export const generateSummary = async (req, res, next) => {
   }
 };
 
-// @desc Chat with a document (RAG: semantic retrieval + conversational memory)
+// @desc Chat with AI — grounded in a document (RAG) if documentId is given,
+// otherwise a general conversation. Both modes keep conversation memory.
 // @route POST /api/ai/chat
 // @access Private
 export const chat = async (req, res, next) => {
   try {
     const { documentId, question } = req.body;
 
-    if (!documentId || !question) {
+    if (!question) {
       return res.status(400).json({
         success: false,
-        error: "Please provide documentId and question",
+        error: "Please provide a question",
         statusCode: 400,
       });
     }
 
-    // Need chunk embeddings for retrieval
-    const document = await Document.findOne({
-      _id: documentId,
-      userId: req.user._id,
-      status: "ready",
-    });
+    let document = null;
+    let relevantChunks = [];
 
-    if (!document) {
-      return res.status(404).json({
-        success: false,
-        error: "Document not found or not ready",
-        statusCode: 404,
+    if (documentId) {
+      document = await Document.findOne({
+        _id: documentId,
+        userId: req.user._id,
+        status: "ready",
       });
+
+      if (!document) {
+        return res.status(404).json({
+          success: false,
+          error: "Document not found or not ready",
+          statusCode: 404,
+        });
+      }
+
+      // Embed the question and retrieve the most semantically relevant chunks
+      const queryEmbedding = await langChain.embedQuery(question);
+      relevantChunks = langChain.findRelevantChunks(document.chunks, queryEmbedding, 3);
     }
 
-    // Embed the question and retrieve the most semantically relevant chunks
-    const queryEmbedding = await langChain.embedQuery(question);
-    const relevantChunks = langChain.findRelevantChunks(document.chunks, queryEmbedding, 3);
     const chunkIndices = relevantChunks.map((c) => c.chunkIndex);
 
-    // Get or create chat history
+    // Get or create chat history — null documentId groups all of a user's
+    // general (non-document) conversation into one history.
     let chatHistory = await ChatHistory.findOne({
       userId: req.user._id,
-      documentId: document._id,
+      documentId: document ? document._id : null,
     });
 
     if (!chatHistory) {
       chatHistory = await ChatHistory.create({
         userId: req.user._id,
-        documentId: document._id,
+        documentId: document ? document._id : null,
         messages: [],
       });
     }
@@ -184,12 +191,14 @@ export const chat = async (req, res, next) => {
       content: m.content,
     }));
 
-    // Generate response via the LangChain RAG chain
-    const answer = await langChain.chatWithContext({
-      question,
-      chunks: relevantChunks,
-      history: recentHistory,
-    });
+    // Generate response via the appropriate LangChain chain
+    const answer = document
+      ? await langChain.chatWithContext({
+          question,
+          chunks: relevantChunks,
+          history: recentHistory,
+        })
+      : await langChain.generalChat({ question, history: recentHistory });
 
     // Save conversation
     chatHistory.messages.push(
@@ -275,31 +284,25 @@ export const explainConcept = async (req, res, next) => {
   }
 };
 
-// @desc Get chat history for a document
+// @desc Get chat history — for a specific document, or the general
+// (non-document) conversation if no documentId is given
+// @route GET /api/ai/chat-history
 // @route GET /api/ai/chat-history/:documentId
 // @access Private
 export const getChatHistory = async (req, res, next) => {
   try {
     const { documentId } = req.params;
 
-    if (!documentId) {
-      return res.status(400).json({
-        success: false,
-        error: "Please provide documentId",
-        statusCode: 400,
-      });
-    }
-
     const chatHistory = await ChatHistory.findOne({
       userId: req.user._id,
-      documentId: documentId,
+      documentId: documentId || null,
     }).select("messages"); // Only retrieve the messages array
 
     if (!chatHistory) {
       return res.status(200).json({
         success: true,
         data: [], // Return an empty array if no chat history found
-        message: "No chat history found for this document",
+        message: "No chat history found",
       });
     }
 
